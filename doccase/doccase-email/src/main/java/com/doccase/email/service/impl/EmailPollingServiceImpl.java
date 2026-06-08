@@ -7,6 +7,7 @@ import com.doccase.common.dto.EmailArchiveEvent;
 import com.doccase.common.util.DistributedLockUtil;
 import com.doccase.email.domain.entity.EmailAccount;
 import com.doccase.email.domain.entity.EmailArchiveRecord;
+import com.doccase.email.feign.DocumentCreateDTO;
 import com.doccase.email.feign.DocumentServiceClient;
 import com.doccase.email.mapper.EmailAccountMapper;
 import com.doccase.email.mapper.EmailArchiveRecordMapper;
@@ -125,7 +126,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
 
         Store store = null;
         try {
-            store = connectToImap(account);
+            store = connectToImapInternal(account);
             String[] folders = account.getFolderFilter() != null ?
                     account.getFolderFilter().split(",") : new String[]{"INBOX"};
 
@@ -209,7 +210,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
 
         Store store = null;
         try {
-            store = connectToImap(account);
+            store = connectToImapInternal(account);
             String[] folders = account.getFolderFilter() != null ?
                     account.getFolderFilter().split(",") : new String[]{"INBOX"};
 
@@ -427,18 +428,16 @@ public class EmailPollingServiceImpl implements EmailPollingService {
             MultipartFile multipartFile = new ByteArrayMultipartFile(
                     "file", fileName, contentType, content);
 
-            String dataJson = String.format(
-                    "{\"title\":\"%s\",\"source\":\"EMAIL\",\"tenantId\":\"%s\"}",
-                    fileName.replace("\"", "\\\""),
-                    account.getTenantId()
-            );
+            DocumentCreateDTO data = DocumentCreateDTO.builder()
+                    .title(fileName)
+                    .description("Email attachment from " + account.getEmailAddress())
+                    .build();
 
             var response = documentServiceClient.createDocument(
-                    account.getUserId(), multipartFile, dataJson);
+                    account.getUserId(), multipartFile, data);
 
             if (response != null && response.getData() != null) {
-                Object id = response.getData().get("id");
-                if (id instanceof Number) return ((Number) id).longValue();
+                return response.getData().getId();
             }
             return null;
         } catch (Exception e) {
@@ -480,6 +479,10 @@ public class EmailPollingServiceImpl implements EmailPollingService {
             baos.write(buffer, 0, len);
         }
         return baos.toByteArray();
+    }
+
+    public Store connectToImapInternal(EmailAccount account) throws MessagingException {
+        return connectToImap(account);
     }
 
     private Store connectToImap(EmailAccount account) throws MessagingException {
