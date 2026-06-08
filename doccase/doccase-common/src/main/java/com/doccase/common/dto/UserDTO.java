@@ -17,4 +17,5 @@ public class UserDTO implements Serializable {
     private Integer status;
     private List<String> roles;
     private LocalDateTime createdAt;
+    private String passwordHash;
 }

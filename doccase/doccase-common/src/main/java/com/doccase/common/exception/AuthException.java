@@ -13,4 +13,8 @@ public class AuthException extends BizException {
     public AuthException(ResponseCode responseCode, String detail) {
         super(responseCode, detail);
     }
+
+    public AuthException(int code, String message) {
+        super(code, message);
+    }
 }

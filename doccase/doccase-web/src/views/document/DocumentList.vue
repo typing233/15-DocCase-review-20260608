@@ -137,8 +137,8 @@ function ocrStatusText(status: number) {
   return map[status] || '未知'
 }
 
-function ocrStatusType(status: number) {
-  const map: Record<number, string> = { 0: 'info', 1: 'warning', 2: 'success', 3: 'danger' }
+function ocrStatusType(status: number): "primary" | "success" | "warning" | "info" | "danger" {
+  const map: Record<number, "primary" | "success" | "warning" | "info" | "danger"> = { 0: 'info', 1: 'warning', 2: 'success', 3: 'danger' }
   return map[status] || 'info'
 }
 </script>

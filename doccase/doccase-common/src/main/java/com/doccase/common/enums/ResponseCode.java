@@ -24,6 +24,7 @@ public enum ResponseCode {
     OAUTH_BINDUNG_EXISTS(1005, "该第三方账号已绑定"),
     ACCOUNT_LOCKED(1006, "账号已锁定"),
     PASSWORD_INCORRECT(1007, "密码错误"),
+    REGISTER_FAILED(1008, "注册失败"),
 
     // Document
     FILE_NOT_FOUND(2001, "文件不存在"),

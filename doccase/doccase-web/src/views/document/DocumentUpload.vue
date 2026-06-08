@@ -24,7 +24,7 @@
           <el-input v-model="form.title" placeholder="文档标题" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" rows="3" placeholder="文档描述" />
+          <el-input v-model="form.description" type="textarea" :rows="3" placeholder="文档描述" />
         </el-form-item>
         <el-form-item label="标签">
           <el-select v-model="form.tagIds" multiple placeholder="选择标签">

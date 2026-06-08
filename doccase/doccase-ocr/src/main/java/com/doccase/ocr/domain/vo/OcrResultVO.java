@@ -3,6 +3,7 @@ package com.doccase.ocr.domain.vo;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -16,17 +17,15 @@ public class OcrResultVO implements Serializable {
 
     private String fullText;
 
-    private Double confidence;
-
-    private Integer pageCount;
+    private BigDecimal confidence;
 
     private List<Map<String, Object>> pageResults;
 
-    private Long processingTimeMs;
+    private Map<String, Object> structuredData;
 
-    private String engine;
+    private Integer processingTimeMs;
 
-    private String language;
+    private String engineUsed;
 
     private Integer taskStatus;
 

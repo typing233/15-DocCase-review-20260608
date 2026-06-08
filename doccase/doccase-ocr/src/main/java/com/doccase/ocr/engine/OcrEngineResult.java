@@ -14,9 +14,9 @@ public class OcrEngineResult {
 
     private String text;
 
-    private double confidence;
+    private Double confidence;
 
     private List<Map<String, Object>> pageResults;
 
-    private long processingTimeMs;
+    private Long processingTimeMs;
 }

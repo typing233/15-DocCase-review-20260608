@@ -108,6 +108,7 @@ public class UserServiceImpl implements UserService {
         dto.setPhone(user.getPhone());
         dto.setAvatarUrl(user.getAvatarUrl());
         dto.setStatus(user.getStatus());
+        dto.setPasswordHash(user.getPasswordHash());
         dto.setRoles(userMapper.selectRoleCodesByUserId(user.getId()));
         dto.setCreatedAt(user.getCreatedAt());
         return dto;

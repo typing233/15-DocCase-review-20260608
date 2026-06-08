@@ -26,9 +26,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -53,18 +54,19 @@ public class OcrTaskServiceImpl implements OcrTaskService {
     public OcrTask submitTask(Long userId, OcrTaskCreateRequest request) {
         OcrTask task = new OcrTask();
         task.setDocumentId(request.getDocumentId());
+        task.setUserId(userId);
         task.setEngine(request.getEngine() != null ? request.getEngine() : "auto");
-        task.setLanguage(request.getLanguage() != null ? request.getLanguage() : "auto");
-        task.setStatus(0); // pending
+        task.setLanguage(request.getLanguage() != null ? request.getLanguage() : "chi_sim");
+        task.setSourcePath("documents/" + request.getDocumentId());
+        task.setFileType("image");
+        task.setStatus(0);
         task.setRetryCount(0);
         task.setMaxRetries(MAX_RETRIES);
-        task.setCreatedBy(userId);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
 
         ocrTaskMapper.insert(task);
 
-        // Publish task to MQ for async processing
         Map<String, Object> message = new HashMap<>();
         message.put("taskId", task.getId());
         message.put("documentId", request.getDocumentId());
@@ -85,44 +87,42 @@ public class OcrTaskServiceImpl implements OcrTaskService {
             return;
         }
 
-        // Update status to processing
-        task.setStatus(1); // processing
+        task.setStatus(1); // preprocessing
+        task.setStartedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
         ocrTaskMapper.updateById(task);
 
         try {
-            // Fetch document file from storage
-            byte[] imageData = fetchDocumentFile(task.getDocumentId());
+            byte[] imageData = fetchDocumentFile(task.getSourcePath());
 
-            // Run preprocessing pipeline
             byte[] preprocessed = preprocessPipeline.execute(imageData);
 
-            // Select and run OCR engine
+            task.setStatus(2); // recognizing
+            task.setUpdatedAt(LocalDateTime.now());
+            ocrTaskMapper.updateById(task);
+
             OcrEngine engine = engineDispatcher.dispatch(task.getLanguage());
             OcrEngineResult result = engine.recognize(preprocessed, task.getLanguage());
 
-            // Save result
             OcrResult ocrResult = new OcrResult();
             ocrResult.setTaskId(taskId);
             ocrResult.setDocumentId(task.getDocumentId());
+            ocrResult.setEngineUsed(engine.getEngineName());
             ocrResult.setFullText(result.getText());
-            ocrResult.setConfidence(result.getConfidence());
-            ocrResult.setPageCount(result.getPageResults() != null ? result.getPageResults().size() : 1);
+            ocrResult.setConfidence(result.getConfidence() != null
+                    ? BigDecimal.valueOf(result.getConfidence()).setScale(4, RoundingMode.HALF_UP)
+                    : null);
             ocrResult.setPageResults(result.getPageResults());
-            ocrResult.setProcessingTimeMs(result.getProcessingTimeMs());
-            ocrResult.setEngine(engine.getEngineName());
-            ocrResult.setLanguage(task.getLanguage());
+            ocrResult.setProcessingTimeMs(result.getProcessingTimeMs() != null
+                    ? result.getProcessingTimeMs().intValue() : null);
             ocrResult.setCreatedAt(LocalDateTime.now());
             ocrResultMapper.insert(ocrResult);
 
-            // Update task status
-            task.setStatus(2); // completed
-            task.setProcessingTimeMs(result.getProcessingTimeMs());
+            task.setStatus(3); // completed
             task.setCompletedAt(LocalDateTime.now());
             task.setUpdatedAt(LocalDateTime.now());
             ocrTaskMapper.updateById(task);
 
-            // Publish completion event
             Map<String, Object> event = new HashMap<>();
             event.put("taskId", taskId);
             event.put("documentId", task.getDocumentId());
@@ -131,8 +131,7 @@ public class OcrTaskServiceImpl implements OcrTaskService {
             event.put("engine", engine.getEngineName());
             rabbitTemplate.convertAndSend(MqConstants.EXCHANGE_OCR, MqConstants.RK_OCR_COMPLETED, event);
 
-            log.info("OCR task completed: taskId={}, processingTime={}ms",
-                    taskId, result.getProcessingTimeMs());
+            log.info("OCR task completed: taskId={}, engine={}", taskId, engine.getEngineName());
 
         } catch (Exception e) {
             log.error("OCR task failed: taskId={}", taskId, e);
@@ -169,11 +168,10 @@ public class OcrTaskServiceImpl implements OcrTaskService {
         vo.setDocumentId(result.getDocumentId());
         vo.setFullText(result.getFullText());
         vo.setConfidence(result.getConfidence());
-        vo.setPageCount(result.getPageCount());
         vo.setPageResults(result.getPageResults());
+        vo.setStructuredData(result.getStructuredData());
         vo.setProcessingTimeMs(result.getProcessingTimeMs());
-        vo.setEngine(result.getEngine());
-        vo.setLanguage(result.getLanguage());
+        vo.setEngineUsed(result.getEngineUsed());
         vo.setTaskStatus(task.getStatus());
         vo.setCompletedAt(task.getCompletedAt());
 
@@ -184,20 +182,18 @@ public class OcrTaskServiceImpl implements OcrTaskService {
     public PageResult<OcrTask> listTasks(Long userId, int pageNum, int pageSize) {
         LambdaQueryWrapper<OcrTask> queryWrapper = new LambdaQueryWrapper<>();
         if (userId != null) {
-            queryWrapper.eq(OcrTask::getCreatedBy, userId);
+            queryWrapper.eq(OcrTask::getUserId, userId);
         }
         queryWrapper.orderByDesc(OcrTask::getCreatedAt);
 
         Page<OcrTask> page = new Page<>(pageNum, pageSize);
-        Page<OcrTask> result = ocrTaskMapper.selectPage(page, queryWrapper);
+        Page<OcrTask> resultPage = ocrTaskMapper.selectPage(page, queryWrapper);
 
-        return PageResult.of(result.getRecords(), result.getTotal(), pageNum, pageSize);
+        return PageResult.of(resultPage.getRecords(), resultPage.getTotal(), pageNum, pageSize);
     }
 
-    private byte[] fetchDocumentFile(Long documentId) {
+    private byte[] fetchDocumentFile(String storagePath) {
         try {
-            // Construct storage path based on document ID
-            String storagePath = "documents/" + documentId;
             InputStream stream = minioClient.getObject(
                     GetObjectArgs.builder()
                             .bucket(bucket)
@@ -206,43 +202,38 @@ public class OcrTaskServiceImpl implements OcrTaskService {
             );
             return stream.readAllBytes();
         } catch (Exception e) {
-            throw new RuntimeException("Failed to fetch document file: " + documentId, e);
+            throw new RuntimeException("Failed to fetch document file: " + storagePath, e);
         }
     }
 
     private void handleTaskFailure(OcrTask task, Exception e) {
         task.setRetryCount(task.getRetryCount() + 1);
-        task.setErrorMessage(e.getMessage());
+        String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
+        task.setErrorMessage(errMsg.length() > 1000 ? errMsg.substring(0, 1000) : errMsg);
         task.setUpdatedAt(LocalDateTime.now());
 
         if (task.getRetryCount() >= task.getMaxRetries()) {
-            // Max retries exceeded, mark as failed
-            task.setStatus(3); // failed
+            task.setStatus(4); // failed
             ocrTaskMapper.updateById(task);
 
-            // Publish failure event
             Map<String, Object> event = new HashMap<>();
             event.put("taskId", task.getId());
             event.put("documentId", task.getDocumentId());
-            event.put("error", e.getMessage());
+            event.put("error", task.getErrorMessage());
             event.put("retryCount", task.getRetryCount());
             rabbitTemplate.convertAndSend(MqConstants.EXCHANGE_OCR, MqConstants.RK_OCR_FAILED, event);
 
-            log.error("OCR task permanently failed after {} retries: taskId={}",
-                    task.getRetryCount(), task.getId());
+            log.error("OCR task permanently failed after {} retries: taskId={}", task.getRetryCount(), task.getId());
         } else {
-            // Retry with exponential backoff
-            task.setStatus(0); // back to pending
+            task.setStatus(0); // back to pending for retry
             ocrTaskMapper.updateById(task);
 
-            // Re-submit with delay (exponential backoff: 2^retryCount seconds)
-            long delayMs = (long) Math.pow(2, task.getRetryCount()) * 1000;
+            long delayMs = (long) Math.pow(2, task.getRetryCount()) * 2000;
             Map<String, Object> message = new HashMap<>();
             message.put("taskId", task.getId());
             message.put("documentId", task.getDocumentId());
             message.put("engine", task.getEngine());
             message.put("language", task.getLanguage());
-            message.put("retryCount", task.getRetryCount());
 
             rabbitTemplate.convertAndSend(MqConstants.EXCHANGE_OCR, MqConstants.RK_OCR_SUBMIT, message,
                     msg -> {
@@ -250,8 +241,7 @@ public class OcrTaskServiceImpl implements OcrTaskService {
                         return msg;
                     });
 
-            log.warn("OCR task retry scheduled: taskId={}, retry={}, delay={}ms",
-                    task.getId(), task.getRetryCount(), delayMs);
+            log.warn("OCR task retry scheduled: taskId={}, retry={}, delay={}ms", task.getId(), task.getRetryCount(), delayMs);
         }
     }
 }

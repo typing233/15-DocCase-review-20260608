@@ -72,8 +72,8 @@ function statusText(status: number) {
   return map[status] || '未知'
 }
 
-function statusType(status: number) {
-  const map: Record<number, string> = { 0: 'info', 1: 'warning', 2: 'warning', 3: 'success', 4: 'danger' }
+function statusType(status: number): "primary" | "success" | "warning" | "info" | "danger" {
+  const map: Record<number, "primary" | "success" | "warning" | "info" | "danger"> = { 0: 'info', 1: 'warning', 2: 'warning', 3: 'success', 4: 'danger' }
   return map[status] || 'info'
 }
 </script>

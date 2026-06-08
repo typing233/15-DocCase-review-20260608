@@ -1,7 +1,9 @@
 package com.doccase.auth.service.impl;
 
 import com.doccase.auth.domain.vo.LoginRequest;
+import com.doccase.auth.domain.vo.RegisterRequest;
 import com.doccase.auth.domain.vo.TokenResponse;
+import com.doccase.auth.feign.UserFeignClient;
 import com.doccase.auth.service.AuditService;
 import com.doccase.auth.service.AuthService;
 import com.doccase.auth.service.MfaService;
@@ -9,15 +11,14 @@ import com.doccase.auth.service.TokenService;
 import com.doccase.common.dto.UserDTO;
 import com.doccase.common.enums.ResponseCode;
 import com.doccase.common.exception.AuthException;
-import com.doccase.common.exception.BizException;
 import com.doccase.common.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -28,7 +29,7 @@ public class AuthServiceImpl implements AuthService {
     private final MfaService mfaService;
     private final AuditService auditService;
     private final UserFeignClient userFeignClient;
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final BCryptPasswordEncoder passwordEncoder;
 
     @Override
     public TokenResponse login(LoginRequest request, String ipAddress, String userAgent) {
@@ -38,16 +39,18 @@ public class AuthServiceImpl implements AuthService {
         }
 
         UserDTO user = response.getData();
-        if (user.getStatus() == 0) {
+
+        if (user.getStatus() != null && user.getStatus() == 0) {
             throw new AuthException(ResponseCode.ACCOUNT_LOCKED);
         }
 
-        // Password verification would normally use the password hash from user service
-        // For now we delegate to user-service internal endpoint
+        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            auditService.logLogin(user.getId(), ipAddress, userAgent, false);
+            throw new AuthException(ResponseCode.PASSWORD_INCORRECT);
+        }
 
         if (mfaService.isMfaEnabled(user.getId())) {
             if (request.getMfaCode() == null || request.getMfaCode().isEmpty()) {
-                auditService.logLogin(user.getId(), ipAddress, userAgent, false);
                 return TokenResponse.mfaRequired();
             }
             if (!mfaService.verifyCode(user.getId(), request.getMfaCode())) {
@@ -62,6 +65,26 @@ public class AuthServiceImpl implements AuthService {
 
         auditService.logLogin(user.getId(), ipAddress, userAgent, true);
         return TokenResponse.of(accessToken, refreshToken, 900L);
+    }
+
+    @Override
+    public TokenResponse register(RegisterRequest request, String ipAddress, String userAgent) {
+        Map<String, Object> createReq = new HashMap<>();
+        createReq.put("username", request.getUsername());
+        createReq.put("password", request.getPassword());
+        createReq.put("email", request.getEmail());
+        createReq.put("phone", request.getPhone());
+
+        ApiResponse<?> createRes = userFeignClient.createUser(createReq);
+        if (createRes == null || createRes.getCode() != 200) {
+            String msg = createRes != null ? createRes.getMessage() : "用户创建失败";
+            throw new AuthException(ResponseCode.REGISTER_FAILED.getCode(), msg);
+        }
+
+        LoginRequest loginReq = new LoginRequest();
+        loginReq.setUsername(request.getUsername());
+        loginReq.setPassword(request.getPassword());
+        return login(loginReq, ipAddress, userAgent);
     }
 
     @Override
@@ -88,14 +111,5 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public void logout(String accessToken) {
         tokenService.revokeToken(accessToken);
-    }
-
-    @FeignClient(name = "doccase-user", path = "/users")
-    public interface UserFeignClient {
-        @GetMapping("/internal/by-username")
-        ApiResponse<UserDTO> getUserByUsername(@RequestParam("username") String username);
-
-        @GetMapping("/internal/{id}")
-        ApiResponse<UserDTO> getUserDTO(@org.springframework.web.bind.annotation.PathVariable("id") Long id);
     }
 }

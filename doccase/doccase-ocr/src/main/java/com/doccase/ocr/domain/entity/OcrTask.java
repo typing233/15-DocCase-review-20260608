@@ -15,12 +15,18 @@ public class OcrTask implements Serializable {
 
     private Long documentId;
 
+    private Long userId;
+
     private String engine;
+
+    private String sourcePath;
+
+    private String fileType;
 
     private String language;
 
     /**
-     * Status: 0=pending, 1=processing, 2=completed, 3=failed
+     * Status: 0=pending, 1=preprocessing, 2=recognizing, 3=completed, 4=failed
      */
     private Integer status;
 
@@ -30,15 +36,13 @@ public class OcrTask implements Serializable {
 
     private String errorMessage;
 
-    private Long processingTimeMs;
+    private LocalDateTime startedAt;
 
-    private Long createdBy;
+    private LocalDateTime completedAt;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
-
-    private LocalDateTime completedAt;
 }

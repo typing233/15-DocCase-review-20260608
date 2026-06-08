@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -20,21 +21,20 @@ public class OcrResult implements Serializable {
 
     private Long documentId;
 
+    private String engineUsed;
+
     @TableField(typeHandler = JacksonTypeHandler.class)
     private String fullText;
 
-    private Double confidence;
-
-    private Integer pageCount;
+    private BigDecimal confidence;
 
     @TableField(typeHandler = JacksonTypeHandler.class)
     private List<Map<String, Object>> pageResults;
 
-    private Long processingTimeMs;
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private Map<String, Object> structuredData;
 
-    private String engine;
-
-    private String language;
+    private Integer processingTimeMs;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
