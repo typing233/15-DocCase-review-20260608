@@ -1,0 +1,43 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: doccase-auth
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        file-extension: yaml
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/doccase_auth?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+    username: ${MYSQL_USER:doccase}
+    password: ${MYSQL_PASSWORD:doccase123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:redis123}
+
+mybatis-plus:
+  mapper-locations: classpath:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: assign_id
+
+doccase:
+  jwt:
+    secret: ${JWT_SECRET:doccase-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256}
+    access-token-expiration: 900000
+    refresh-token-expiration: 604800000
+
+logging:
+  level:
+    com.doccase.auth: DEBUG

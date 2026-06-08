@@ -1,0 +1,26 @@
+[
+  {
+    "resource": "POST:/auth/login",
+    "count": 5,
+    "timeWindow": 30,
+    "minRequestAmount": 5,
+    "statIntervalMs": 30000,
+    "slowRatioThreshold": 1.0
+  },
+  {
+    "resource": "GET:/search",
+    "count": 10,
+    "timeWindow": 60,
+    "minRequestAmount": 10,
+    "statIntervalMs": 60000,
+    "slowRatioThreshold": 0.6
+  },
+  {
+    "resource": "POST:/ocr/tasks",
+    "count": 5,
+    "timeWindow": 60,
+    "minRequestAmount": 5,
+    "statIntervalMs": 60000,
+    "slowRatioThreshold": 0.5
+  }
+]

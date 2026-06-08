@@ -1,0 +1,26 @@
+[
+  {
+    "resource": "auth-service",
+    "count": 5,
+    "timeWindow": 30,
+    "minRequestAmount": 10,
+    "statIntervalMs": 30000,
+    "slowRatioThreshold": 0.5
+  },
+  {
+    "resource": "search-service",
+    "count": 10,
+    "timeWindow": 60,
+    "minRequestAmount": 10,
+    "statIntervalMs": 60000,
+    "slowRatioThreshold": 0.6
+  },
+  {
+    "resource": "ocr-service",
+    "count": 5,
+    "timeWindow": 60,
+    "minRequestAmount": 5,
+    "statIntervalMs": 60000,
+    "slowRatioThreshold": 0.5
+  }
+]

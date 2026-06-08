@@ -1,0 +1,43 @@
+[
+  {
+    "resource": "auth-service",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 100,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "document-service",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 200,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "search-service",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 150,
+    "strategy": 0,
+    "controlBehavior": 0
+  },
+  {
+    "resource": "ocr-service",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 50,
+    "strategy": 0,
+    "controlBehavior": 2,
+    "maxQueueingTimeMs": 10000
+  },
+  {
+    "resource": "tag-service",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 150,
+    "strategy": 0,
+    "controlBehavior": 0
+  }
+]

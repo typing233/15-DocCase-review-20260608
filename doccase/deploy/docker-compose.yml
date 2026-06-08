@@ -1,0 +1,319 @@
+version: '3.8'
+
+services:
+  # =================== Infrastructure ===================
+  nacos:
+    image: nacos/nacos-server:v2.3.0
+    container_name: doccase-nacos
+    environment:
+      MODE: standalone
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: mysql
+      MYSQL_SERVICE_PORT: 3306
+      MYSQL_SERVICE_DB_NAME: nacos_config
+      MYSQL_SERVICE_USER: nacos
+      MYSQL_SERVICE_PASSWORD: nacos123
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: doccase-mysql
+    command: --default-authentication-plugin=caching_sha2_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_USER: doccase
+      MYSQL_PASSWORD: doccase123
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: doccase-redis
+    command: redis-server --requirepass redis123 --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: doccase-es
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: doccase-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: doccase
+      RABBITMQ_DEFAULT_PASS: doccase123
+      RABBITMQ_DEFAULT_VHOST: /doccase
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: doccase-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: doccase
+      MINIO_ROOT_PASSWORD: doccase123456
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  # =================== Application Services ===================
+  gateway-service:
+    build:
+      context: ..
+      dockerfile: doccase-gateway/Dockerfile
+    container_name: doccase-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      JWT_SECRET: doccase-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256
+    depends_on:
+      nacos:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ..
+      dockerfile: doccase-auth/Dockerfile
+    container_name: doccase-auth
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: doccase123
+      JWT_SECRET: doccase-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256
+    depends_on:
+      - mysql
+      - redis
+      - nacos
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  user-service:
+    build:
+      context: ..
+      dockerfile: doccase-user/Dockerfile
+    container_name: doccase-user
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: doccase123
+    depends_on:
+      - mysql
+      - redis
+      - nacos
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  document-service:
+    build:
+      context: ..
+      dockerfile: doccase-document/Dockerfile
+    container_name: doccase-document
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: doccase123
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: doccase
+      MINIO_SECRET_KEY: doccase123456
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASSWORD: doccase123
+    depends_on:
+      - mysql
+      - redis
+      - nacos
+      - minio
+      - rabbitmq
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  tag-service:
+    build:
+      context: ..
+      dockerfile: doccase-tag/Dockerfile
+    container_name: doccase-tag
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: doccase123
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASSWORD: doccase123
+    depends_on:
+      - mysql
+      - redis
+      - nacos
+      - rabbitmq
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  ocr-service:
+    build:
+      context: ..
+      dockerfile: doccase-ocr/Dockerfile
+    container_name: doccase-ocr
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: doccase123
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: doccase
+      MINIO_SECRET_KEY: doccase123456
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASSWORD: doccase123
+    volumes:
+      - ocr-temp:/tmp/ocr
+    depends_on:
+      - mysql
+      - redis
+      - nacos
+      - rabbitmq
+      - minio
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  search-service:
+    build:
+      context: ..
+      dockerfile: doccase-search/Dockerfile
+    container_name: doccase-search
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      NACOS_ADDR: nacos:8848
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis123
+      ES_HOST: elasticsearch
+      ES_PORT: 9200
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PASSWORD: doccase123
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      nacos:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../doccase-web
+      dockerfile: Dockerfile
+    container_name: doccase-web
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway-service
+    networks:
+      - doccase-net
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  es-data:
+  rabbitmq-data:
+  minio-data:
+  ocr-temp:
+
+networks:
+  doccase-net:
+    driver: bridge

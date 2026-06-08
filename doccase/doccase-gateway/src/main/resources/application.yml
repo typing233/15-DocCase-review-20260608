@@ -1,0 +1,89 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: doccase-gateway
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        file-extension: yaml
+    gateway:
+      routes:
+        - id: auth-service
+          uri: lb://doccase-auth
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - StripPrefix=1
+        - id: user-service
+          uri: lb://doccase-user
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - StripPrefix=1
+        - id: document-service
+          uri: lb://doccase-document
+          predicates:
+            - Path=/api/documents/**,/api/upload/**,/api/export/**
+          filters:
+            - StripPrefix=1
+        - id: tag-service
+          uri: lb://doccase-tag
+          predicates:
+            - Path=/api/tags/**
+          filters:
+            - StripPrefix=1
+        - id: ocr-service
+          uri: lb://doccase-ocr
+          predicates:
+            - Path=/api/ocr/**
+          filters:
+            - StripPrefix=1
+        - id: search-service
+          uri: lb://doccase-search
+          predicates:
+            - Path=/api/search/**
+          filters:
+            - StripPrefix=1
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+spring.cloud.sentinel:
+  transport:
+    dashboard: ${SENTINEL_DASHBOARD:localhost:8858}
+  datasource:
+    flow:
+      file:
+        file: classpath:sentinel/flow-rules.json
+        rule-type: flow
+    degrade:
+      file:
+        file: classpath:sentinel/degrade-rules.json
+        rule-type: degrade
+
+feign:
+  circuitbreaker:
+    enabled: true
+  client:
+    config:
+      default:
+        connect-timeout: 5000
+        read-timeout: 10000
+
+doccase:
+  jwt:
+    secret: ${JWT_SECRET:doccase-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256}
+
+logging:
+  level:
+    com.doccase.gateway: DEBUG
+    org.springframework.cloud.gateway: INFO

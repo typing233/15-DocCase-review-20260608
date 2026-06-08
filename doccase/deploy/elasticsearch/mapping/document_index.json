@@ -1,0 +1,37 @@
+{
+  "mappings": {
+    "properties": {
+      "id": { "type": "long" },
+      "title": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+      "description": { "type": "text", "analyzer": "ik_max_word" },
+      "file_name": { "type": "text", "analyzer": "standard", "fields": { "keyword": { "type": "keyword" } } },
+      "file_type": { "type": "keyword" },
+      "mime_type": { "type": "keyword" },
+      "user_id": { "type": "long" },
+      "tag_ids": { "type": "long" },
+      "tag_names": { "type": "text", "analyzer": "ik_max_word", "fields": { "keyword": { "type": "keyword" } } },
+      "ocr_text": { "type": "text", "analyzer": "ik_max_word" },
+      "metadata": { "type": "object", "dynamic": true },
+      "status": { "type": "integer" },
+      "file_size": { "type": "long" },
+      "created_at": { "type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis" },
+      "updated_at": { "type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis" }
+    }
+  },
+  "settings": {
+    "number_of_shards": 3,
+    "number_of_replicas": 1,
+    "analysis": {
+      "analyzer": {
+        "ik_max_word": {
+          "type": "custom",
+          "tokenizer": "ik_max_word"
+        },
+        "ik_smart": {
+          "type": "custom",
+          "tokenizer": "ik_smart"
+        }
+      }
+    }
+  }
+}
