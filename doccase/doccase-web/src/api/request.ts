@@ -21,7 +21,7 @@ request.interceptors.request.use(
 
 request.interceptors.response.use(
   (response: AxiosResponse) => {
-    const { code, message, data } = response.data
+    const { code, message } = response.data
     if (code === 200) {
       return response.data
     }

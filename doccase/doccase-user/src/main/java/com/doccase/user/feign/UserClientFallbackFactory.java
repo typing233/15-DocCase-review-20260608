@@ -15,6 +15,6 @@ public class UserClientFallbackFactory implements FallbackFactory<UserClient> {
     @Override
     public UserClient create(Throwable cause) {
         log.warn("User service call failed, using fallback: {}", cause.getMessage());
-        return id -> ApiResponse.fail("User service unavailable");
+        return id -> ApiResponse.error(503, "User service unavailable");
     }
 }

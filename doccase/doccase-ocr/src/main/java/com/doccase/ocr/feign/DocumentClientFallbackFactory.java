@@ -14,6 +14,6 @@ public class DocumentClientFallbackFactory implements FallbackFactory<DocumentCl
     @Override
     public DocumentClient create(Throwable cause) {
         log.error("Document service call failed: {}", cause.getMessage());
-        return id -> ApiResponse.fail("Document service unavailable");
+        return id -> ApiResponse.error(503, "Document service unavailable");
     }
 }

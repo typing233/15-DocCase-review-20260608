@@ -110,7 +110,7 @@ const flatTags = computed(() => {
 
 onMounted(() => tagStore.fetchTagTree())
 
-function handleNodeClick(data: TagDTO) {
+function handleNodeClick(_data: TagDTO) {
   // Could show tag details
 }
 

@@ -13,6 +13,11 @@ public class BizException extends RuntimeException {
         this.code = code;
     }
 
+    public BizException(String message) {
+        super(message);
+        this.code = 400;
+    }
+
     public BizException(ResponseCode responseCode) {
         super(responseCode.getMessage());
         this.code = responseCode.getCode();

@@ -1,27 +1,18 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
+import { useAuthStore } from '@/stores/auth'
 
 export function useAuth() {
   const router = useRouter()
-  const userStore = useUserStore()
+  const authStore = useAuthStore()
 
-  const isLoggedIn = computed(() => !!userStore.token)
-  const currentUser = computed(() => userStore.userInfo)
-  const roles = computed(() => userStore.userInfo?.roles || [])
-
-  function hasRole(role: string): boolean {
-    return roles.value.includes(role)
-  }
-
-  function isAdmin(): boolean {
-    return hasRole('ADMIN')
-  }
+  const isLoggedIn = computed(() => authStore.isAuthenticated)
+  const username = computed(() => authStore.username)
 
   async function logout() {
-    userStore.logout()
+    authStore.logout()
     await router.push('/login')
   }
 
-  return { isLoggedIn, currentUser, roles, hasRole, isAdmin, logout }
+  return { isLoggedIn, username, logout }
 }
