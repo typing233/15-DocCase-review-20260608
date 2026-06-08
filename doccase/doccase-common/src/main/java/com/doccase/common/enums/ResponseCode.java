@@ -49,7 +49,25 @@ public enum ResponseCode {
 
     // Search
     SEARCH_INDEX_FAILED(5001, "索引更新失败"),
-    SEARCH_QUERY_FAILED(5002, "搜索查询失败");
+    SEARCH_QUERY_FAILED(5002, "搜索查询失败"),
+    SEARCH_REINDEX_IN_PROGRESS(5003, "重建索引进行中"),
+    SEARCH_EMBEDDING_FAILED(5004, "向量嵌入生成失败"),
+
+    // Rule Engine
+    RULE_NOT_FOUND(6001, "规则不存在"),
+    RULE_CONDITION_INVALID(6002, "规则条件无效"),
+    RULE_VERSION_CONFLICT(6003, "规则版本冲突"),
+    RULE_EXECUTION_FAILED(6004, "规则执行失败"),
+    RULE_REGEX_INVALID(6005, "正则表达式无效"),
+
+    // Email
+    EMAIL_ACCOUNT_NOT_FOUND(7001, "邮箱账户不存在"),
+    EMAIL_CONNECTION_FAILED(7002, "IMAP连接失败"),
+    EMAIL_AUTH_FAILED(7003, "邮箱认证失败"),
+    EMAIL_POLL_FAILED(7004, "邮件拉取失败"),
+    EMAIL_ARCHIVE_FAILED(7005, "附件归档失败"),
+    EMAIL_ACCESS_DENIED(7006, "无权操作此邮箱账户"),
+    EMAIL_ENCRYPTED_ATTACHMENT(7007, "加密附件无法处理");
 
     private final int code;
     private final String message;

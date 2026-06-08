@@ -9,7 +9,7 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
 @SpringBootApplication(scanBasePackages = {"com.doccase.tag", "com.doccase.common"})
 @EnableDiscoveryClient
 @EnableFeignClients
-@MapperScan("com.doccase.tag.mapper")
+@MapperScan({"com.doccase.tag.mapper", "com.doccase.tag.rule.mapper"})
 public class TagApplication {
 
     public static void main(String[] args) {

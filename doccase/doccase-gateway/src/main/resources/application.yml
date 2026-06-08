@@ -51,6 +51,18 @@ spring:
             - Path=/api/search/**
           filters:
             - StripPrefix=1
+        - id: email-service
+          uri: lb://doccase-email
+          predicates:
+            - Path=/api/email/**
+          filters:
+            - StripPrefix=1
+        - id: rule-service
+          uri: lb://doccase-tag
+          predicates:
+            - Path=/api/rules/**
+          filters:
+            - StripPrefix=1
   data:
     redis:
       host: ${REDIS_HOST:localhost}

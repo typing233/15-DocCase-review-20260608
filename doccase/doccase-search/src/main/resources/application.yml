@@ -37,6 +37,30 @@ elasticsearch:
   username: ${ES_USERNAME:}
   password: ${ES_PASSWORD:}
   index-name: doccase_documents
+  alias-name: doccase_documents
+  reindex:
+    batch-size: 1000
+    scroll-timeout: 5m
+  search:
+    hybrid-alpha: 0.7
+    max-knn-candidates: 100
+
+embedding:
+  service-url: ${EMBEDDING_SERVICE_URL:http://localhost:8090/embed}
+  model: text2vec-base-chinese
+  dimensions: 768
+  batch-size: 32
+  cache-ttl-hours: 24
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    export:
+      prometheus:
+        enabled: true
 
 logging:
   level:

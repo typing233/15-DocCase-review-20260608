@@ -3,6 +3,8 @@ package com.doccase.search.controller;
 import com.doccase.common.domain.PageResult;
 import com.doccase.common.response.ApiResponse;
 import com.doccase.search.document.DocumentIndex;
+import com.doccase.search.dto.HybridSearchRequest;
+import com.doccase.search.dto.SearchAfterRequest;
 import com.doccase.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -30,9 +32,34 @@ public class SearchController {
                 startDate, endDate, pageNum, pageSize));
     }
 
+    @PostMapping("/hybrid")
+    public ApiResponse<PageResult<DocumentIndex>> hybridSearch(@RequestBody HybridSearchRequest request) {
+        return ApiResponse.success(searchService.hybridSearch(request));
+    }
+
+    @PostMapping("/semantic")
+    public ApiResponse<PageResult<DocumentIndex>> semanticSearch(
+            @RequestParam String query,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(defaultValue = "1") int pageNum,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        return ApiResponse.success(searchService.semanticSearch(query, tenantId, pageNum, pageSize));
+    }
+
+    @PostMapping("/scroll")
+    public ApiResponse<PageResult<DocumentIndex>> searchAfter(@RequestBody SearchAfterRequest request) {
+        return ApiResponse.success(searchService.searchAfter(request));
+    }
+
     @PostMapping("/index")
     public ApiResponse<Void> indexDocument(@RequestBody DocumentIndex document) {
-        searchService.indexDocument(document);
+        searchService.indexDocumentWithEmbedding(document);
+        return ApiResponse.success();
+    }
+
+    @PostMapping("/index/bulk")
+    public ApiResponse<Void> bulkIndex(@RequestBody List<DocumentIndex> documents) {
+        searchService.bulkIndex(documents);
         return ApiResponse.success();
     }
 

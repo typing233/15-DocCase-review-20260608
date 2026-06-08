@@ -63,6 +63,21 @@ const router = createRouter({
           component: () => import('@/views/ocr/OcrResults.vue'),
         },
         {
+          path: 'search',
+          name: 'AdvancedSearch',
+          component: () => import('@/views/search/AdvancedSearch.vue'),
+        },
+        {
+          path: 'rules',
+          name: 'RuleManagement',
+          component: () => import('@/views/rule/RuleManagement.vue'),
+        },
+        {
+          path: 'email',
+          name: 'EmailAccountList',
+          component: () => import('@/views/email/EmailAccountList.vue'),
+        },
+        {
           path: 'admin/users',
           name: 'UserManagement',
           component: () => import('@/views/admin/UserManagement.vue'),

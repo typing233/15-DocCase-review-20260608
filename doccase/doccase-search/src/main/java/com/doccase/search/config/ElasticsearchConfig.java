@@ -9,11 +9,16 @@ import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.client.RestClient;
+import org.elasticsearch.client.RestClientBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.retry.annotation.EnableRetry;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @Configuration
+@EnableRetry
+@EnableAsync
 public class ElasticsearchConfig {
 
     @Value("${elasticsearch.host:localhost}")
@@ -30,18 +35,26 @@ public class ElasticsearchConfig {
 
     @Bean
     public RestClient restClient() {
-        if (username != null && !username.isEmpty()) {
-            BasicCredentialsProvider credentialsProvider = new BasicCredentialsProvider();
-            credentialsProvider.setCredentials(AuthScope.ANY,
-                    new UsernamePasswordCredentials(username, password));
+        RestClientBuilder builder = RestClient.builder(new HttpHost(host, port, "http"))
+                .setRequestConfigCallback(config -> config
+                        .setConnectTimeout(5000)
+                        .setSocketTimeout(60000)
+                        .setConnectionRequestTimeout(5000)
+                )
+                .setHttpClientConfigCallback(httpClientBuilder -> {
+                    httpClientBuilder.setMaxConnTotal(100);
+                    httpClientBuilder.setMaxConnPerRoute(50);
 
-            return RestClient.builder(new HttpHost(host, port, "http"))
-                    .setHttpClientConfigCallback(httpClientBuilder ->
-                            httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider))
-                    .build();
-        }
+                    if (username != null && !username.isEmpty()) {
+                        BasicCredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+                        credentialsProvider.setCredentials(AuthScope.ANY,
+                                new UsernamePasswordCredentials(username, password));
+                        httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider);
+                    }
+                    return httpClientBuilder;
+                });
 
-        return RestClient.builder(new HttpHost(host, port, "http")).build();
+        return builder.build();
     }
 
     @Bean

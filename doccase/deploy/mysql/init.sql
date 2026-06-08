@@ -19,11 +19,15 @@ CREATE DATABASE IF NOT EXISTS `doccase_tag` DEFAULT CHARACTER SET utf8mb4 COLLAT
 -- OCR service database
 CREATE DATABASE IF NOT EXISTS `doccase_ocr` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- Email service database
+CREATE DATABASE IF NOT EXISTS `doccase_email` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 GRANT ALL PRIVILEGES ON `doccase_user`.* TO 'doccase'@'%';
 GRANT ALL PRIVILEGES ON `doccase_auth`.* TO 'doccase'@'%';
 GRANT ALL PRIVILEGES ON `doccase_document`.* TO 'doccase'@'%';
 GRANT ALL PRIVILEGES ON `doccase_tag`.* TO 'doccase'@'%';
 GRANT ALL PRIVILEGES ON `doccase_ocr`.* TO 'doccase'@'%';
+GRANT ALL PRIVILEGES ON `doccase_email`.* TO 'doccase'@'%';
 FLUSH PRIVILEGES;
 
 -- ============ USER SERVICE TABLES ============
@@ -214,6 +218,7 @@ USE `doccase_tag`;
 
 CREATE TABLE `dc_tag` (
     `id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL DEFAULT 'default',
     `name` VARCHAR(128) NOT NULL,
     `parent_id` BIGINT DEFAULT NULL,
     `path` VARCHAR(1024) NOT NULL COMMENT 'Materialized path: /1/5/12/',
@@ -228,6 +233,8 @@ CREATE TABLE `dc_tag` (
     `is_deleted` TINYINT NOT NULL DEFAULT 0,
     `deleted_at` DATETIME DEFAULT NULL,
     PRIMARY KEY (`id`),
+    KEY `idx_tenant_id` (`tenant_id`),
+    KEY `idx_tenant_parent` (`tenant_id`, `parent_id`),
     KEY `idx_parent_id` (`parent_id`),
     KEY `idx_path` (`path`(255)),
     KEY `idx_name` (`name`)
@@ -235,12 +242,92 @@ CREATE TABLE `dc_tag` (
 
 CREATE TABLE `dc_document_tag` (
     `id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL DEFAULT 'default',
     `document_id` BIGINT NOT NULL,
     `tag_id` BIGINT NOT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_doc_tag` (`document_id`, `tag_id`),
+    KEY `idx_tenant_doc` (`tenant_id`, `document_id`),
+    KEY `idx_tenant_tag` (`tenant_id`, `tag_id`),
     KEY `idx_tag_id` (`tag_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `dc_tag_operation_log` (
+    `id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL,
+    `operation_type` VARCHAR(32) NOT NULL COMMENT 'MERGE, REPARENT, BATCH_TAG, BATCH_UNTAG, BATCH_DELETE',
+    `source_tag_ids` JSON NOT NULL,
+    `target_tag_id` BIGINT DEFAULT NULL,
+    `document_ids` JSON DEFAULT NULL,
+    `operator_id` BIGINT NOT NULL,
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0=pending, 1=processing, 2=completed, 3=failed, 4=conflict_resolved',
+    `conflict_detail` JSON DEFAULT NULL,
+    `result_detail` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `completed_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_tenant_status` (`tenant_id`, `status`),
+    KEY `idx_operator` (`operator_id`),
+    KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Auto-tag rule engine tables
+CREATE TABLE `dc_auto_tag_rule` (
+    `id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `description` VARCHAR(512) DEFAULT NULL,
+    `priority` INT NOT NULL DEFAULT 0,
+    `is_enabled` TINYINT NOT NULL DEFAULT 1,
+    `rollout_percentage` INT NOT NULL DEFAULT 100 COMMENT '0-100 for grayscale',
+    `version` INT NOT NULL DEFAULT 1,
+    `condition_tree` JSON NOT NULL COMMENT 'Nested AND/OR/NOT condition tree',
+    `actions` JSON NOT NULL COMMENT '[{type:ADD_TAG, tagId:123}]',
+    `trigger_event` VARCHAR(64) NOT NULL DEFAULT 'DOCUMENT_CREATED',
+    `execution_count` BIGINT NOT NULL DEFAULT 0,
+    `error_count` BIGINT NOT NULL DEFAULT 0,
+    `last_executed_at` DATETIME DEFAULT NULL,
+    `created_by` BIGINT NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT NOT NULL DEFAULT 0,
+    `deleted_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_tenant_enabled` (`tenant_id`, `is_enabled`),
+    KEY `idx_trigger_event` (`trigger_event`),
+    KEY `idx_priority` (`priority`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `dc_auto_tag_rule_version` (
+    `id` BIGINT NOT NULL,
+    `rule_id` BIGINT NOT NULL,
+    `version` INT NOT NULL,
+    `condition_tree` JSON NOT NULL,
+    `actions` JSON NOT NULL,
+    `rollout_percentage` INT NOT NULL,
+    `created_by` BIGINT NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_rule_version` (`rule_id`, `version`),
+    KEY `idx_rule_id` (`rule_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `dc_auto_tag_execution_log` (
+    `id` BIGINT NOT NULL,
+    `rule_id` BIGINT NOT NULL,
+    `rule_version` INT NOT NULL,
+    `document_id` BIGINT NOT NULL,
+    `trigger_event` VARCHAR(64) NOT NULL,
+    `matched` TINYINT NOT NULL DEFAULT 0,
+    `actions_executed` JSON DEFAULT NULL,
+    `error_message` TEXT DEFAULT NULL,
+    `execution_time_ms` INT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_rule_id` (`rule_id`),
+    KEY `idx_document_id` (`document_id`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============ OCR SERVICE TABLES ============
@@ -284,4 +371,79 @@ CREATE TABLE `dc_ocr_result` (
     UNIQUE KEY `uk_task_id` (`task_id`),
     KEY `idx_document_id` (`document_id`),
     KEY `idx_confidence` (`confidence`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============ EMAIL SERVICE TABLES ============
+USE `doccase_email`;
+
+CREATE TABLE `dc_email_account` (
+    `id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL DEFAULT 'default',
+    `email_address` VARCHAR(256) NOT NULL,
+    `imap_host` VARCHAR(256) NOT NULL,
+    `imap_port` INT NOT NULL DEFAULT 993,
+    `use_ssl` TINYINT NOT NULL DEFAULT 1,
+    `username` VARCHAR(256) NOT NULL,
+    `password_encrypted` VARCHAR(512) NOT NULL COMMENT 'AES-256 encrypted',
+    `folder_filter` VARCHAR(512) DEFAULT 'INBOX',
+    `attachment_filter` VARCHAR(512) DEFAULT NULL,
+    `poll_interval_minutes` INT NOT NULL DEFAULT 15,
+    `last_poll_uid` BIGINT DEFAULT NULL,
+    `last_poll_at` DATETIME DEFAULT NULL,
+    `is_enabled` TINYINT NOT NULL DEFAULT 1,
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '0=error, 1=active, 2=paused',
+    `error_message` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT NOT NULL DEFAULT 0,
+    `deleted_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_id` (`user_id`),
+    KEY `idx_tenant_id` (`tenant_id`),
+    UNIQUE KEY `uk_user_email` (`user_id`, `email_address`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `dc_email_archive_record` (
+    `id` BIGINT NOT NULL,
+    `account_id` BIGINT NOT NULL,
+    `tenant_id` VARCHAR(64) NOT NULL,
+    `message_id` VARCHAR(512) NOT NULL COMMENT 'RFC 2822 Message-ID header',
+    `message_uid` BIGINT NOT NULL DEFAULT 0,
+    `from_address` VARCHAR(256) DEFAULT NULL,
+    `subject` VARCHAR(1024) DEFAULT NULL,
+    `received_at` DATETIME DEFAULT NULL,
+    `attachment_file_name` VARCHAR(256) NOT NULL,
+    `attachment_hash` VARCHAR(128) NOT NULL COMMENT 'SHA-256',
+    `attachment_size` BIGINT NOT NULL,
+    `attachment_mime_type` VARCHAR(128) DEFAULT NULL,
+    `is_encrypted` TINYINT NOT NULL DEFAULT 0,
+    `decryption_attempted` TINYINT NOT NULL DEFAULT 0,
+    `document_id` BIGINT DEFAULT NULL,
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0=pending, 1=archived, 2=duplicate, 3=skipped, 4=failed',
+    `skip_reason` VARCHAR(256) DEFAULT NULL,
+    `error_message` TEXT DEFAULT NULL,
+    `retry_count` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_message_attachment` (`message_id`(255), `attachment_hash`),
+    KEY `idx_account_id` (`account_id`),
+    KEY `idx_document_id` (`document_id`),
+    KEY `idx_status` (`status`),
+    KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `dc_email_audit_log` (
+    `id` BIGINT NOT NULL,
+    `account_id` BIGINT NOT NULL,
+    `action` VARCHAR(64) NOT NULL COMMENT 'POLL_START, POLL_END, FETCH, ARCHIVE, SKIP, ERROR, DECRYPT',
+    `message_id` VARCHAR(512) DEFAULT NULL,
+    `attachment_name` VARCHAR(256) DEFAULT NULL,
+    `detail` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_account_id` (`account_id`),
+    KEY `idx_action` (`action`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

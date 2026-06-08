@@ -1,0 +1,50 @@
+{
+  "mappings": {
+    "_routing": { "required": false },
+    "properties": {
+      "id": { "type": "long" },
+      "tenantId": { "type": "keyword" },
+      "title": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+      "description": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+      "fileName": { "type": "text", "analyzer": "standard", "fields": { "keyword": { "type": "keyword" } } },
+      "fileType": { "type": "keyword" },
+      "mimeType": { "type": "keyword" },
+      "userId": { "type": "long" },
+      "tagIds": { "type": "long" },
+      "tagNames": { "type": "text", "analyzer": "ik_max_word", "fields": { "keyword": { "type": "keyword" } } },
+      "ocrText": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },
+      "metadata": { "type": "object", "dynamic": true },
+      "status": { "type": "integer" },
+      "fileSize": { "type": "long" },
+      "contentVector": {
+        "type": "dense_vector",
+        "dims": 768,
+        "index": true,
+        "similarity": "cosine"
+      },
+      "createdAt": { "type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis" },
+      "updatedAt": { "type": "date", "format": "yyyy-MM-dd HH:mm:ss||yyyy-MM-dd||epoch_millis" }
+    }
+  },
+  "settings": {
+    "number_of_shards": 5,
+    "number_of_replicas": 1,
+    "index.routing.allocation.total_shards_per_node": 3,
+    "refresh_interval": "1s",
+    "analysis": {
+      "analyzer": {
+        "ik_max_word": {
+          "type": "custom",
+          "tokenizer": "ik_max_word"
+        },
+        "ik_smart": {
+          "type": "custom",
+          "tokenizer": "ik_smart"
+        }
+      }
+    }
+  },
+  "aliases": {
+    "doccase_documents": {}
+  }
+}

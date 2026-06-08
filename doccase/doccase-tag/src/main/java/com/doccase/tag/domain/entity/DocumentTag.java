@@ -13,6 +13,8 @@ public class DocumentTag implements Serializable {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
+    private String tenantId;
+
     private Long documentId;
 
     private Long tagId;

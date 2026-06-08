@@ -1,0 +1,85 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: doccase-email
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        file-extension: yaml
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/doccase_email?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:doccase}
+    password: ${MYSQL_PASSWORD:doccase123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:redis123}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:doccase}
+    password: ${RABBITMQ_PASSWORD:doccase123}
+    virtual-host: /doccase
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 5
+    publisher-confirm-type: correlated
+    publisher-returns: true
+
+mybatis-plus:
+  mapper-locations: classpath:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: assign_id
+
+email:
+  poll:
+    default-interval-minutes: 15
+    max-messages-per-poll: 100
+    connection-timeout-ms: 30000
+    read-timeout-ms: 60000
+  archive:
+    max-attachment-size-mb: 100
+    allowed-extensions: pdf,doc,docx,xls,xlsx,ppt,pptx,jpg,png,zip,rar,eml
+  encryption:
+    aes-key: ${EMAIL_AES_KEY:doccase-email-aes256-key-32char!}
+  retry:
+    max-attempts: 3
+    initial-interval-ms: 1000
+    multiplier: 2.0
+    max-interval-ms: 30000
+
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:doccase}
+  secret-key: ${MINIO_SECRET_KEY:doccase123456}
+  bucket: doccase-email-attachments
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+logging:
+  level:
+    com.doccase.email: DEBUG

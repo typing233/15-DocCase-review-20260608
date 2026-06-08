@@ -13,6 +13,8 @@ public class Tag implements Serializable {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
+    private String tenantId;
+
     private String name;
 
     private Long parentId;

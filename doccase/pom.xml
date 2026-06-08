@@ -20,6 +20,7 @@
         <module>doccase-tag</module>
         <module>doccase-ocr</module>
         <module>doccase-search</module>
+        <module>doccase-email</module>
     </modules>
 
     <properties>

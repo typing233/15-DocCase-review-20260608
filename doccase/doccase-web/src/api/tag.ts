@@ -33,3 +33,20 @@ export function importTags(file: File) {
 export function exportTags() {
   return request.get<any, Blob>('/tags/export', { responseType: 'blob' })
 }
+
+export function batchTag(documentIds: number[], tagIds: number[], action: 'ADD' | 'REMOVE') {
+  return request.post<any, ApiResponse<void>>('/tags/batch/tag', { documentIds, tagIds, action })
+}
+
+export function batchMove(tagIds: number[], targetParentId: number | null) {
+  return request.post<any, ApiResponse<void>>('/tags/batch/move', { tagIds, targetParentId })
+}
+
+export function batchDelete(tagIds: number[]) {
+  return request.post<any, ApiResponse<void>>('/tags/batch/delete', { tagIds })
+}
+
+export function getInheritedDocuments(tagId: number) {
+  return request.get<any, ApiResponse<number[]>>(`/tags/inherited/${tagId}/documents`)
+}
+
