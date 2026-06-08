@@ -149,6 +149,9 @@ public class EmailAccountController {
         record.setUpdatedAt(LocalDateTime.now());
         archiveRecordMapper.updateById(record);
 
+        // Trigger actual reprocessing
+        emailPollingService.retryRecord(record);
+
         return ApiResponse.success();
     }
 

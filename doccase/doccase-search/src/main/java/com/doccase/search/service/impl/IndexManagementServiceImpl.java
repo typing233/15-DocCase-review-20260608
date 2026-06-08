@@ -2,11 +2,10 @@ package com.doccase.search.service.impl;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Time;
-import co.elastic.clients.elasticsearch.cat.IndicesResponse;
 import co.elastic.clients.elasticsearch.core.*;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.indices.*;
-import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch.indices.get_alias.IndexAliases;
 import com.doccase.common.constant.RedisKeyConstants;
 import com.doccase.common.util.DistributedLockUtil;
 import com.doccase.search.document.DocumentIndex;
@@ -82,7 +81,7 @@ public class IndexManagementServiceImpl implements IndexManagementService {
             long totalDocs = getDocumentCount(sourceIndex);
             long processed = 0;
 
-            SearchResponse<DocumentIndex> scrollResponse = esClient.search(s -> s
+            SearchResponse<DocumentIndex> initialResponse = esClient.search(s -> s
                             .index(sourceIndex)
                             .size(batchSize)
                             .scroll(Time.of(t -> t.time(request.getScrollTimeout())))
@@ -90,11 +89,10 @@ public class IndexManagementServiceImpl implements IndexManagementService {
                     DocumentIndex.class
             );
 
-            String scrollId = scrollResponse.scrollId();
+            String scrollId = initialResponse.scrollId();
+            List<Hit<DocumentIndex>> hits = initialResponse.hits().hits();
 
-            while (scrollResponse.hits().hits().size() > 0 && !reindexCancelled.get()) {
-                List<Hit<DocumentIndex>> hits = scrollResponse.hits().hits();
-
+            while (hits.size() > 0 && !reindexCancelled.get()) {
                 BulkRequest.Builder bulkBuilder = new BulkRequest.Builder();
                 for (Hit<DocumentIndex> hit : hits) {
                     if (hit.source() != null) {
@@ -120,12 +118,13 @@ public class IndexManagementServiceImpl implements IndexManagementService {
                 log.info("Reindex progress: {}/{} ({}%)", processed, totalDocs, progress);
 
                 String currentScrollId = scrollId;
-                scrollResponse = esClient.scroll(sr -> sr
+                ScrollResponse<DocumentIndex> scrollResp = esClient.scroll(sr -> sr
                                 .scrollId(currentScrollId)
                                 .scroll(Time.of(t -> t.time(request.getScrollTimeout()))),
                         DocumentIndex.class
                 );
-                scrollId = scrollResponse.scrollId();
+                scrollId = scrollResp.scrollId();
+                hits = scrollResp.hits().hits();
             }
 
             String finalScrollId = scrollId;

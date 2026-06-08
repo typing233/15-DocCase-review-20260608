@@ -7,16 +7,16 @@ import com.doccase.common.dto.EmailArchiveEvent;
 import com.doccase.common.util.DistributedLockUtil;
 import com.doccase.email.domain.entity.EmailAccount;
 import com.doccase.email.domain.entity.EmailArchiveRecord;
+import com.doccase.email.feign.DocumentServiceClient;
 import com.doccase.email.mapper.EmailAccountMapper;
 import com.doccase.email.mapper.EmailArchiveRecordMapper;
 import com.doccase.email.metrics.EmailMetrics;
 import com.doccase.email.service.AuditService;
 import com.doccase.email.service.EmailPollingService;
+import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import jakarta.mail.*;
 import jakarta.mail.internet.MimeMessage;
-import jakarta.mail.search.ComparisonTerm;
-import jakarta.mail.search.SearchTerm;
-import jakarta.mail.search.SentDateTerm;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -24,9 +24,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -47,6 +49,8 @@ public class EmailPollingServiceImpl implements EmailPollingService {
     private final DistributedLockUtil distributedLockUtil;
     private final RabbitTemplate rabbitTemplate;
     private final EmailMetrics emailMetrics;
+    private final MinioClient minioClient;
+    private final DocumentServiceClient documentServiceClient;
 
     @Value("${email.poll.max-messages-per-poll:100}")
     private int maxMessagesPerPoll;
@@ -65,6 +69,9 @@ public class EmailPollingServiceImpl implements EmailPollingService {
 
     @Value("${email.encryption.aes-key:doccase-email-aes256-key-32char!}")
     private String aesKey;
+
+    @Value("${minio.bucket:doccase-email-attachments}")
+    private String minioBucket;
 
     @Override
     public void pollAllAccounts() {
@@ -95,9 +102,110 @@ public class EmailPollingServiceImpl implements EmailPollingService {
         });
     }
 
+    @Override
+    public void retryRecord(EmailArchiveRecord record) {
+        EmailAccount account = accountMapper.selectById(record.getAccountId());
+        if (account == null) {
+            record.setStatus(3);
+            record.setErrorMessage("Account not found");
+            record.setUpdatedAt(LocalDateTime.now());
+            archiveRecordMapper.updateById(record);
+            return;
+        }
+
+        String lockKey = RedisKeyConstants.EMAIL_POLL_LOCK_PREFIX + account.getId() + ":retry:" + record.getId();
+        distributedLockUtil.executeWithLock(lockKey, 5, 120, TimeUnit.SECONDS, () -> {
+            doRetryRecord(account, record);
+        });
+    }
+
+    private void doRetryRecord(EmailAccount account, EmailArchiveRecord record) {
+        auditService.log(account.getId(), "RETRY_START", record.getMessageId(),
+                record.getAttachmentFileName(), "retry #" + record.getRetryCount());
+
+        Store store = null;
+        try {
+            store = connectToImap(account);
+            String[] folders = account.getFolderFilter() != null ?
+                    account.getFolderFilter().split(",") : new String[]{"INBOX"};
+
+            boolean found = false;
+            for (String folderName : folders) {
+                Folder folder = store.getFolder(folderName.trim());
+                if (!folder.exists()) continue;
+
+                if (folder instanceof UIDFolder uidFolder) {
+                    folder.open(Folder.READ_ONLY);
+                    if (record.getMessageUid() != null && record.getMessageUid() > 0) {
+                        Message msg = uidFolder.getMessageByUID(record.getMessageUid());
+                        if (msg instanceof MimeMessage mimeMessage) {
+                            found = retryAttachmentFromMessage(account, record, mimeMessage);
+                        }
+                    }
+                    folder.close(false);
+                }
+                if (found) break;
+            }
+
+            if (!found) {
+                record.setStatus(3);
+                record.setErrorMessage("Original message not found in mailbox");
+                record.setUpdatedAt(LocalDateTime.now());
+                archiveRecordMapper.updateById(record);
+                auditService.log(account.getId(), "RETRY_FAILED", record.getMessageId(),
+                        record.getAttachmentFileName(), "message not found");
+            }
+        } catch (Exception e) {
+            log.error("Retry failed for record {}", record.getId(), e);
+            record.setStatus(3);
+            record.setErrorMessage(e.getMessage());
+            record.setRetryCount(record.getRetryCount() + 1);
+            record.setUpdatedAt(LocalDateTime.now());
+            archiveRecordMapper.updateById(record);
+            auditService.log(account.getId(), "RETRY_FAILED", record.getMessageId(),
+                    record.getAttachmentFileName(), e.getMessage());
+        } finally {
+            if (store != null && store.isConnected()) {
+                try { store.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private boolean retryAttachmentFromMessage(EmailAccount account, EmailArchiveRecord record,
+                                               MimeMessage message) throws Exception {
+        Object content = message.getContent();
+        if (!(content instanceof Multipart multipart)) return false;
+
+        for (int i = 0; i < multipart.getCount(); i++) {
+            BodyPart bodyPart = multipart.getBodyPart(i);
+            String fileName = bodyPart.getFileName();
+            if (fileName == null) continue;
+            if (!fileName.equals(record.getAttachmentFileName())) continue;
+
+            byte[] attachmentBytes = readAttachment(bodyPart);
+            String hash = sha256(attachmentBytes);
+            if (!hash.equals(record.getAttachmentHash())) continue;
+
+            // Re-attempt document creation
+            Long documentId = uploadAndCreateDocument(account, record.getAttachmentFileName(),
+                    attachmentBytes, record.getAttachmentMimeType());
+
+            record.setDocumentId(documentId);
+            record.setStatus(1);
+            record.setErrorMessage(null);
+            record.setUpdatedAt(LocalDateTime.now());
+            archiveRecordMapper.updateById(record);
+
+            auditService.log(account.getId(), "RETRY_SUCCESS", record.getMessageId(),
+                    record.getAttachmentFileName(), "documentId=" + documentId);
+            return true;
+        }
+        return false;
+    }
+
     private void doPoll(EmailAccount account) {
         auditService.log(account.getId(), "POLL_START", null, null,
-                "Starting poll for " + account.getEmailAddress());
+                "Starting UID-based incremental poll for " + account.getEmailAddress());
 
         Store store = null;
         try {
@@ -106,6 +214,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
                     account.getFolderFilter().split(",") : new String[]{"INBOX"};
 
             int totalProcessed = 0;
+            long maxUidSeen = account.getLastPollUid() != null ? account.getLastPollUid() : 0L;
 
             for (String folderName : folders) {
                 Folder folder = store.getFolder(folderName.trim());
@@ -115,20 +224,46 @@ public class EmailPollingServiceImpl implements EmailPollingService {
                 }
                 folder.open(Folder.READ_ONLY);
 
-                Message[] messages = folder.getMessages();
-                int startIdx = Math.max(0, messages.length - maxMessagesPerPoll);
+                if (folder instanceof UIDFolder uidFolder) {
+                    long startUid = maxUidSeen + 1;
+                    long uidValidity = uidFolder.getUIDValidity();
 
-                for (int i = startIdx; i < messages.length && totalProcessed < maxMessagesPerPoll; i++) {
-                    Message message = messages[i];
-                    if (message instanceof MimeMessage mimeMessage) {
-                        processMessage(account, mimeMessage);
-                        totalProcessed++;
+                    Message[] messages = uidFolder.getMessagesByUID(startUid, UIDFolder.LASTUID);
+                    if (messages == null) messages = new Message[0];
+
+                    for (int i = 0; i < messages.length && totalProcessed < maxMessagesPerPoll; i++) {
+                        Message message = messages[i];
+                        if (message == null) continue;
+
+                        long uid = uidFolder.getUID(message);
+                        if (uid <= maxUidSeen) continue;
+
+                        if (message instanceof MimeMessage mimeMessage) {
+                            processMessage(account, mimeMessage, uid);
+                            totalProcessed++;
+                        }
+
+                        if (uid > maxUidSeen) {
+                            maxUidSeen = uid;
+                        }
+                    }
+                } else {
+                    // Fallback for non-UID folders: process last N messages
+                    Message[] messages = folder.getMessages();
+                    int startIdx = Math.max(0, messages.length - maxMessagesPerPoll);
+                    for (int i = startIdx; i < messages.length && totalProcessed < maxMessagesPerPoll; i++) {
+                        if (messages[i] instanceof MimeMessage mimeMessage) {
+                            processMessage(account, mimeMessage, 0L);
+                            totalProcessed++;
+                        }
                     }
                 }
 
                 folder.close(false);
             }
 
+            // Persist checkpoint
+            account.setLastPollUid(maxUidSeen);
             account.setLastPollAt(LocalDateTime.now());
             account.setStatus(1);
             account.setErrorMessage(null);
@@ -136,7 +271,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
 
             emailMetrics.recordPoll(account.getId(), totalProcessed);
             auditService.log(account.getId(), "POLL_END", null, null,
-                    "Processed " + totalProcessed + " messages");
+                    "Processed " + totalProcessed + " messages, checkpoint UID=" + maxUidSeen);
 
         } catch (Exception e) {
             log.error("IMAP poll failed for account {}", account.getEmailAddress(), e);
@@ -153,7 +288,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
         }
     }
 
-    private void processMessage(EmailAccount account, MimeMessage message) throws Exception {
+    private void processMessage(EmailAccount account, MimeMessage message, long uid) throws Exception {
         String messageId = message.getMessageID();
         if (messageId == null) messageId = UUID.randomUUID().toString();
 
@@ -172,37 +307,28 @@ public class EmailPollingServiceImpl implements EmailPollingService {
                     String fileName = bodyPart.getFileName();
                     if (fileName == null) continue;
 
-                    // Check extension filter
                     if (!isAllowedExtension(fileName)) {
                         auditService.log(account.getId(), "SKIP", messageId, fileName, "extension not allowed");
                         continue;
                     }
 
-                    // Check size
                     int size = bodyPart.getSize();
                     if (size > maxAttachmentSizeMb * 1024 * 1024) {
                         auditService.log(account.getId(), "SKIP", messageId, fileName, "exceeds max size");
                         continue;
                     }
 
-                    processAttachment(account, messageId, from, subject, receivedDate, bodyPart, fileName);
+                    processAttachment(account, messageId, uid, from, subject, receivedDate, bodyPart, fileName);
                 }
             }
         }
     }
 
-    private void processAttachment(EmailAccount account, String messageId, String from,
-                                   String subject, Date receivedDate, BodyPart bodyPart, String fileName) {
+    private void processAttachment(EmailAccount account, String messageId, long uid,
+                                   String from, String subject, Date receivedDate,
+                                   BodyPart bodyPart, String fileName) {
         try {
-            InputStream is = bodyPart.getInputStream();
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = is.read(buffer)) != -1) {
-                baos.write(buffer, 0, len);
-            }
-            byte[] attachmentBytes = baos.toByteArray();
-
+            byte[] attachmentBytes = readAttachment(bodyPart);
             String hash = sha256(attachmentBytes);
 
             // Idempotent check
@@ -216,15 +342,13 @@ public class EmailPollingServiceImpl implements EmailPollingService {
                 return;
             }
 
-            // Detect encrypted content
             boolean isEncrypted = detectEncrypted(fileName, attachmentBytes);
 
-            // Create archive record
             EmailArchiveRecord record = new EmailArchiveRecord();
             record.setAccountId(account.getId());
             record.setTenantId(account.getTenantId());
             record.setMessageId(messageId);
-            record.setMessageUid(0L);
+            record.setMessageUid(uid);
             record.setFromAddress(from);
             record.setSubject(subject);
             record.setReceivedAt(receivedDate != null ?
@@ -235,12 +359,12 @@ public class EmailPollingServiceImpl implements EmailPollingService {
             record.setAttachmentMimeType(bodyPart.getContentType());
             record.setIsEncrypted(isEncrypted);
             record.setDecryptionAttempted(false);
-            record.setStatus(isEncrypted ? 3 : 1); // 3=skipped if encrypted, 1=archived
             record.setRetryCount(0);
             record.setCreatedAt(LocalDateTime.now());
             record.setUpdatedAt(LocalDateTime.now());
 
             if (isEncrypted) {
+                record.setStatus(2);
                 record.setSkipReason("encrypted attachment");
                 archiveRecordMapper.insert(record);
                 auditService.log(account.getId(), "SKIP", messageId, fileName, "encrypted");
@@ -248,9 +372,30 @@ public class EmailPollingServiceImpl implements EmailPollingService {
                 return;
             }
 
+            // Upload to MinIO for durable storage
+            String objectKey = account.getTenantId() + "/" + account.getId() + "/" + hash + "/" + fileName;
+            minioClient.putObject(PutObjectArgs.builder()
+                    .bucket(minioBucket)
+                    .object(objectKey)
+                    .stream(new ByteArrayInputStream(attachmentBytes), attachmentBytes.length, -1)
+                    .contentType(bodyPart.getContentType())
+                    .build());
+
+            // Create document via document service
+            Long documentId = null;
+            try {
+                documentId = uploadAndCreateDocument(account, fileName, attachmentBytes, bodyPart.getContentType());
+                record.setStatus(1);
+                record.setDocumentId(documentId);
+            } catch (Exception e) {
+                log.warn("Failed to create document for attachment {}, will queue for retry", fileName, e);
+                record.setStatus(3);
+                record.setErrorMessage("Document creation failed: " + e.getMessage());
+            }
+
             archiveRecordMapper.insert(record);
 
-            // Publish archive event for document creation
+            // Publish event
             EmailArchiveEvent event = EmailArchiveEvent.builder()
                     .accountId(account.getId())
                     .tenantId(account.getTenantId())
@@ -266,7 +411,7 @@ public class EmailPollingServiceImpl implements EmailPollingService {
             rabbitTemplate.convertAndSend(MqConstants.EXCHANGE_EMAIL, MqConstants.RK_EMAIL_ATTACHMENT_ARCHIVED, event);
 
             auditService.log(account.getId(), "ARCHIVE", messageId, fileName,
-                    "size=" + attachmentBytes.length + ", hash=" + hash);
+                    "uid=" + uid + ", size=" + attachmentBytes.length + ", documentId=" + documentId);
             emailMetrics.recordArchived();
 
         } catch (Exception e) {
@@ -274,6 +419,67 @@ public class EmailPollingServiceImpl implements EmailPollingService {
             auditService.log(account.getId(), "ERROR", messageId, fileName, e.getMessage());
             emailMetrics.recordError();
         }
+    }
+
+    private Long uploadAndCreateDocument(EmailAccount account, String fileName,
+                                         byte[] content, String contentType) {
+        try {
+            MultipartFile multipartFile = new ByteArrayMultipartFile(
+                    "file", fileName, contentType, content);
+
+            String dataJson = String.format(
+                    "{\"title\":\"%s\",\"source\":\"EMAIL\",\"tenantId\":\"%s\"}",
+                    fileName.replace("\"", "\\\""),
+                    account.getTenantId()
+            );
+
+            var response = documentServiceClient.createDocument(
+                    account.getUserId(), multipartFile, dataJson);
+
+            if (response != null && response.getData() != null) {
+                Object id = response.getData().get("id");
+                if (id instanceof Number) return ((Number) id).longValue();
+            }
+            return null;
+        } catch (Exception e) {
+            throw new RuntimeException("Document creation via Feign failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static class ByteArrayMultipartFile implements MultipartFile {
+        private final String name;
+        private final String originalFilename;
+        private final String contentType;
+        private final byte[] content;
+
+        ByteArrayMultipartFile(String name, String originalFilename, String contentType, byte[] content) {
+            this.name = name;
+            this.originalFilename = originalFilename;
+            this.contentType = contentType;
+            this.content = content;
+        }
+
+        @Override public String getName() { return name; }
+        @Override public String getOriginalFilename() { return originalFilename; }
+        @Override public String getContentType() { return contentType; }
+        @Override public boolean isEmpty() { return content.length == 0; }
+        @Override public long getSize() { return content.length; }
+        @Override public byte[] getBytes() { return content; }
+        @Override public InputStream getInputStream() { return new ByteArrayInputStream(content); }
+        @Override public void transferTo(java.io.File dest) throws java.io.IOException {
+            java.nio.file.Files.write(dest.toPath(), content);
+        }
+    }
+
+    private byte[] readAttachment(BodyPart bodyPart) throws Exception {
+        InputStream is = bodyPart.getInputStream();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int len;
+        while ((len = is.read(buffer)) != -1) {
+            baos.write(buffer, 0, len);
+        }
+        return baos.toByteArray();
     }
 
     private Store connectToImap(EmailAccount account) throws MessagingException {
@@ -328,11 +534,9 @@ public class EmailPollingServiceImpl implements EmailPollingService {
 
     private boolean detectEncrypted(String fileName, byte[] content) {
         String lower = fileName.toLowerCase();
-        // Encrypted ZIP detection (PKZip with encryption flag)
         if (lower.endsWith(".zip") && content.length > 8) {
             return (content[6] & 0x01) != 0;
         }
-        // Password-protected PDF
         if (lower.endsWith(".pdf") && content.length > 128) {
             String header = new String(content, 0, Math.min(content.length, 4096), StandardCharsets.ISO_8859_1);
             return header.contains("/Encrypt");

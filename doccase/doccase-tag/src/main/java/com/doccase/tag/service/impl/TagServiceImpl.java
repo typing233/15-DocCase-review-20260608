@@ -57,10 +57,7 @@ public class TagServiceImpl implements TagService {
         tag.setIsDeleted(0);
 
         if (request.getParentId() != null && request.getParentId() > 0) {
-            Tag parent = tagMapper.selectById(request.getParentId());
-            if (parent == null) {
-                throw new BizException("Parent tag not found");
-            }
+            Tag parent = getTagAndVerifyTenant(request.getParentId(), tenantId);
             tag.setLevel(parent.getLevel() + 1);
             tagMapper.insert(tag);
             tag.setPath(parent.getPath() + tag.getId() + "/");
@@ -88,8 +85,7 @@ public class TagServiceImpl implements TagService {
     @Override
     @Transactional
     public Tag updateTag(String tenantId, Long tagId, TagCreateRequest request) {
-        Tag tag = tagMapper.selectById(tagId);
-        if (tag == null) throw new BizException("Tag not found");
+        Tag tag = getTagAndVerifyTenant(tagId, tenantId);
 
         tag.setName(request.getName());
         if (request.getColor() != null) tag.setColor(request.getColor());
@@ -112,8 +108,7 @@ public class TagServiceImpl implements TagService {
     @Override
     @Transactional
     public void deleteTag(String tenantId, Long tagId) {
-        Tag tag = tagMapper.selectById(tagId);
-        if (tag == null) throw new BizException("Tag not found");
+        Tag tag = getTagAndVerifyTenant(tagId, tenantId);
 
         LambdaQueryWrapper<Tag> subtreeQuery = new LambdaQueryWrapper<>();
         subtreeQuery.eq(Tag::getTenantId, tenantId)
@@ -130,7 +125,8 @@ public class TagServiceImpl implements TagService {
 
         if (!subtreeTagIds.isEmpty()) {
             LambdaQueryWrapper<DocumentTag> dtQuery = new LambdaQueryWrapper<>();
-            dtQuery.in(DocumentTag::getTagId, subtreeTagIds);
+            dtQuery.eq(DocumentTag::getTenantId, tenantId)
+                    .in(DocumentTag::getTagId, subtreeTagIds);
             documentTagMapper.delete(dtQuery);
         }
 
@@ -183,23 +179,21 @@ public class TagServiceImpl implements TagService {
     public void mergeTag(String tenantId, Long operatorId, TagMergeRequest request) {
         String lockKey = RedisKeyConstants.TAG_LOCK_PREFIX + request.getSourceTagId() + ":" + request.getTargetTagId();
         distributedLockUtil.executeWithLock(lockKey, 10, 30, TimeUnit.SECONDS, () -> {
-            Tag sourceTag = tagMapper.selectById(request.getSourceTagId());
-            Tag targetTag = tagMapper.selectById(request.getTargetTagId());
-
-            if (sourceTag == null || targetTag == null) {
-                throw new BizException("Source or target tag not found");
-            }
+            Tag sourceTag = getTagAndVerifyTenant(request.getSourceTagId(), tenantId);
+            Tag targetTag = getTagAndVerifyTenant(request.getTargetTagId(), tenantId);
 
             // Detect conflicts: documents that already have the target tag
             LambdaQueryWrapper<DocumentTag> sourceDocsQuery = new LambdaQueryWrapper<>();
-            sourceDocsQuery.eq(DocumentTag::getTagId, request.getSourceTagId());
+            sourceDocsQuery.eq(DocumentTag::getTenantId, tenantId)
+                    .eq(DocumentTag::getTagId, request.getSourceTagId());
             List<DocumentTag> sourceDocs = documentTagMapper.selectList(sourceDocsQuery);
 
             List<Long> sourceDocIds = sourceDocs.stream().map(DocumentTag::getDocumentId).toList();
 
             if (!sourceDocIds.isEmpty()) {
                 LambdaQueryWrapper<DocumentTag> conflictQuery = new LambdaQueryWrapper<>();
-                conflictQuery.eq(DocumentTag::getTagId, request.getTargetTagId())
+                conflictQuery.eq(DocumentTag::getTenantId, tenantId)
+                        .eq(DocumentTag::getTagId, request.getTargetTagId())
                         .in(DocumentTag::getDocumentId, sourceDocIds);
                 List<DocumentTag> conflicts = documentTagMapper.selectList(conflictQuery);
                 Set<Long> conflictDocIds = conflicts.stream().map(DocumentTag::getDocumentId).collect(Collectors.toSet());
@@ -207,7 +201,8 @@ public class TagServiceImpl implements TagService {
                 // Auto-resolve: remove duplicates from source before merge
                 if (!conflictDocIds.isEmpty()) {
                     LambdaQueryWrapper<DocumentTag> removeConflicts = new LambdaQueryWrapper<>();
-                    removeConflicts.eq(DocumentTag::getTagId, request.getSourceTagId())
+                    removeConflicts.eq(DocumentTag::getTenantId, tenantId)
+                            .eq(DocumentTag::getTagId, request.getSourceTagId())
                             .in(DocumentTag::getDocumentId, conflictDocIds);
                     documentTagMapper.delete(removeConflicts);
                 }
@@ -215,13 +210,15 @@ public class TagServiceImpl implements TagService {
 
             // Move remaining associations from source to target
             LambdaUpdateWrapper<DocumentTag> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(DocumentTag::getTagId, request.getSourceTagId())
+            updateWrapper.eq(DocumentTag::getTenantId, tenantId)
+                    .eq(DocumentTag::getTagId, request.getSourceTagId())
                     .set(DocumentTag::getTagId, request.getTargetTagId());
             documentTagMapper.update(null, updateWrapper);
 
             // Recalculate target count
             LambdaQueryWrapper<DocumentTag> countQuery = new LambdaQueryWrapper<>();
-            countQuery.eq(DocumentTag::getTagId, request.getTargetTagId());
+            countQuery.eq(DocumentTag::getTenantId, tenantId)
+                    .eq(DocumentTag::getTagId, request.getTargetTagId());
             long newCount = documentTagMapper.selectCount(countQuery);
             targetTag.setDocumentCount((int) newCount);
             targetTag.setUpdatedAt(LocalDateTime.now());
@@ -276,6 +273,8 @@ public class TagServiceImpl implements TagService {
     @Override
     @Transactional
     public void addDocumentTag(String tenantId, Long documentId, Long tagId) {
+        getTagAndVerifyTenant(tagId, tenantId);
+
         LambdaQueryWrapper<DocumentTag> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(DocumentTag::getTenantId, tenantId)
                 .eq(DocumentTag::getDocumentId, documentId)
@@ -289,17 +288,18 @@ public class TagServiceImpl implements TagService {
         documentTag.setCreatedAt(LocalDateTime.now());
         documentTagMapper.insert(documentTag);
 
-        Tag tag = tagMapper.selectById(tagId);
-        if (tag != null) {
-            tag.setDocumentCount(tag.getDocumentCount() + 1);
-            tag.setUpdatedAt(LocalDateTime.now());
-            tagMapper.updateById(tag);
-        }
+        tagMapper.update(null, new LambdaUpdateWrapper<Tag>()
+                .eq(Tag::getId, tagId)
+                .eq(Tag::getTenantId, tenantId)
+                .setSql("document_count = document_count + 1")
+                .set(Tag::getUpdatedAt, LocalDateTime.now()));
     }
 
     @Override
     @Transactional
     public void removeDocumentTag(String tenantId, Long documentId, Long tagId) {
+        getTagAndVerifyTenant(tagId, tenantId);
+
         LambdaQueryWrapper<DocumentTag> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(DocumentTag::getTenantId, tenantId)
                 .eq(DocumentTag::getDocumentId, documentId)
@@ -307,12 +307,12 @@ public class TagServiceImpl implements TagService {
         int deleted = documentTagMapper.delete(queryWrapper);
 
         if (deleted > 0) {
-            Tag tag = tagMapper.selectById(tagId);
-            if (tag != null && tag.getDocumentCount() > 0) {
-                tag.setDocumentCount(tag.getDocumentCount() - 1);
-                tag.setUpdatedAt(LocalDateTime.now());
-                tagMapper.updateById(tag);
-            }
+            tagMapper.update(null, new LambdaUpdateWrapper<Tag>()
+                    .eq(Tag::getId, tagId)
+                    .eq(Tag::getTenantId, tenantId)
+                    .gt(Tag::getDocumentCount, 0)
+                    .setSql("document_count = document_count - 1")
+                    .set(Tag::getUpdatedAt, LocalDateTime.now()));
         }
     }
 
@@ -354,6 +354,11 @@ public class TagServiceImpl implements TagService {
     @Override
     @Transactional
     public void batchTag(String tenantId, Long operatorId, BatchTagRequest request) {
+        // Pre-validate all tag IDs belong to this tenant
+        for (Long tagId : request.getTagIds()) {
+            getTagAndVerifyTenant(tagId, tenantId);
+        }
+
         String lockKey = RedisKeyConstants.TAG_BATCH_LOCK_PREFIX + tenantId + ":" + UUID.randomUUID();
         distributedLockUtil.executeWithLock(lockKey, 10, 60, TimeUnit.SECONDS, () -> {
             TagOperationLog opLog = new TagOperationLog();
@@ -410,13 +415,11 @@ public class TagServiceImpl implements TagService {
             Tag parentTag = null;
 
             if (targetParentId > 0) {
-                parentTag = tagMapper.selectById(targetParentId);
-                if (parentTag == null) throw new BizException("Target parent tag not found");
+                parentTag = getTagAndVerifyTenant(targetParentId, tenantId);
             }
 
             for (Long tagId : request.getTagIds()) {
-                Tag tag = tagMapper.selectById(tagId);
-                if (tag == null) continue;
+                Tag tag = getTagAndVerifyTenant(tagId, tenantId);
 
                 // Detect circular reference
                 if (parentTag != null && parentTag.getPath().contains("/" + tagId + "/")) {
@@ -465,8 +468,7 @@ public class TagServiceImpl implements TagService {
 
     @Override
     public List<Long> getInheritedDocumentIds(String tenantId, Long tagId) {
-        Tag tag = tagMapper.selectById(tagId);
-        if (tag == null) return Collections.emptyList();
+        Tag tag = getTagAndVerifyTenant(tagId, tenantId);
 
         // Find all descendant tags (using materialized path)
         LambdaQueryWrapper<Tag> subtreeQuery = new LambdaQueryWrapper<>();
@@ -486,5 +488,16 @@ public class TagServiceImpl implements TagService {
                 .map(DocumentTag::getDocumentId)
                 .distinct()
                 .collect(Collectors.toList());
+    }
+
+    private Tag getTagAndVerifyTenant(Long tagId, String tenantId) {
+        Tag tag = tagMapper.selectById(tagId);
+        if (tag == null) {
+            throw new BizException("Tag not found");
+        }
+        if (!tenantId.equals(tag.getTenantId())) {
+            throw new BizException("Access denied: tag does not belong to current tenant");
+        }
+        return tag;
     }
 }
